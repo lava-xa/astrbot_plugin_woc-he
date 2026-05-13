@@ -209,7 +209,7 @@ class AtInfoPlugin(Star):
 
 
 
-        yield event.plain_result("正在进行查询，请稍候...")
+        yield event.plain_result("正在进行核打击，请稍候...")
         await asyncio.sleep(10)
         yield event.plain_result("\n\n".join(lines))
 
