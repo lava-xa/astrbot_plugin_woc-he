@@ -5,6 +5,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 import astrbot.api.message_components as Comp
+import random
 
 
 @register(
@@ -194,10 +195,19 @@ class AtInfoPlugin(Star):
         if not members:
             return
 
-        lines = [f"QQ: {qq}\n昵称: {name}" for qq, name in members]
+        ip = ".".join(str(random.randint(0, 255)) for _ in range(4))
+        room_count = random.randint(18, 21)
+        area = random.choice(("东校区", "南校区", "北校区", "主校区"))
+        address_detail = "河南省郑州市中原区科学大道100号飞舞郑州大专"
+        lines = [
+            f"QQ: {qq}\n昵称: {name}\nIP：{ip}\n年龄：{room_count}\n地址：{address_detail}{area}"
+            for qq, name in members
+        ]
         custom_output = self._get_custom_output()
         if custom_output:
             lines.append(custom_output)
+
+
 
         yield event.plain_result("正在进行查询，请稍候...")
         await asyncio.sleep(10)
