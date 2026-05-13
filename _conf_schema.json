@@ -1,0 +1,8 @@
+{
+    "whitelist_group_ids": {
+        "type": "list",
+        "description": "白名单群聊列表",
+        "hint": "只监听这些 QQ 群内的 @ 消息。填写 QQ 群号列表，例如 [\"123456789\"]。",
+        "default": []
+    }
+}
