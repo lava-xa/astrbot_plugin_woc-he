@@ -1,5 +1,6 @@
 from typing import Any
 
+import asyncio
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
@@ -39,6 +40,9 @@ class AtInfoPlugin(Star):
     def _get_whitelist_group_ids(self) -> set[str]:
         return set(self._normalize_string_list(self._get_config_value("whitelist_group_ids", [])))
 
+    def _get_custom_output(self) -> str:
+        return str(self._get_config_value("custom_output", "") or "").strip()
+
     def _get_group_id(self, event: AstrMessageEvent) -> str:
         message_obj = getattr(event, "message_obj", None)
         group_id = getattr(message_obj, "group_id", None) or getattr(message_obj, "session_id", None)
@@ -48,6 +52,29 @@ class AtInfoPlugin(Star):
         message_obj = getattr(event, "message_obj", None)
         message = getattr(message_obj, "message", None)
         return list(message or [])
+
+    def _get_plain_text(self, event: AstrMessageEvent) -> str:
+        texts: list[str] = []
+        for component in self._get_message_chain(event):
+            if not isinstance(component, Comp.Plain) and component.__class__.__name__.lower() != "plain":
+                continue
+            text = self._get_component_text_value(component, ("text", "message"))
+            if text:
+                texts.append(text)
+
+        if texts:
+            return "".join(texts)
+
+        message_obj = getattr(event, "message_obj", None)
+        raw_message = getattr(message_obj, "raw_message", None)
+        for data in self._iter_raw_text_data(raw_message):
+            text = str(data.get("text") or "").strip()
+            if text:
+                texts.append(text)
+        return "".join(texts)
+
+    def _is_woche_command(self, event: AstrMessageEvent) -> bool:
+        return self._get_plain_text(event).strip().startswith("/woche")
 
     def _get_component_text_value(self, component: Any, keys: tuple[str, ...]) -> str:
         for key in keys:
@@ -73,6 +100,12 @@ class AtInfoPlugin(Star):
         )
 
     def _iter_raw_at_data(self, raw_message: Any) -> list[dict]:
+        return self._iter_raw_segment_data(raw_message, "at")
+
+    def _iter_raw_text_data(self, raw_message: Any) -> list[dict]:
+        return self._iter_raw_segment_data(raw_message, "text")
+
+    def _iter_raw_segment_data(self, raw_message: Any, segment_type: str) -> list[dict]:
         if isinstance(raw_message, dict):
             raw_segments = raw_message.get("message", [])
         else:
@@ -81,14 +114,14 @@ class AtInfoPlugin(Star):
         if not isinstance(raw_segments, list):
             return []
 
-        at_data: list[dict] = []
+        segment_data: list[dict] = []
         for segment in raw_segments:
-            if not isinstance(segment, dict) or segment.get("type") != "at":
+            if not isinstance(segment, dict) or segment.get("type") != segment_type:
                 continue
             data = segment.get("data") or {}
             if isinstance(data, dict):
-                at_data.append(data)
-        return at_data
+                segment_data.append(data)
+        return segment_data
 
     def _get_raw_at_name_map(self, event: AstrMessageEvent) -> dict[str, str]:
         message_obj = getattr(event, "message_obj", None)
@@ -154,11 +187,20 @@ class AtInfoPlugin(Star):
         if group_id not in self._get_whitelist_group_ids():
             return
 
+        if not self._is_woche_command(event):
+            return
+
         members = await self._collect_at_members(event, group_id)
         if not members:
             return
 
         lines = [f"QQ: {qq}\n昵称: {name}" for qq, name in members]
+        custom_output = self._get_custom_output()
+        if custom_output:
+            lines.append(custom_output)
+
+        yield event.plain_result("正在进行查询，请稍候...")
+        await asyncio.sleep(10)
         yield event.plain_result("\n\n".join(lines))
 
     async def terminate(self):

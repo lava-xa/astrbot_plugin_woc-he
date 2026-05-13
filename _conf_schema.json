@@ -4,5 +4,11 @@
         "description": "白名单群聊列表",
         "hint": "只监听这些 QQ 群内的 @ 消息。填写 QQ 群号列表，例如 [\"123456789\"]。",
         "default": []
+    },
+    "custom_output": {
+        "type": "text",
+        "description": "自定义输出内容",
+        "hint": "每次输出被 @ 用户信息时，会把这段内容一起发送。留空则不追加。",
+        "default": ""
     }
 }
