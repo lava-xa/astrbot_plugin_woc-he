@@ -1,6 +1,9 @@
 from typing import Any
 
 import asyncio
+import ast
+from pathlib import Path
+import re
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
@@ -18,6 +21,7 @@ class AtInfoPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
         self.config = config or {}
+        self.china_regions = self._load_china_regions()
 
     def _get_config_value(self, key: str, default=None):
         if self.config and hasattr(self.config, "get"):
@@ -227,6 +231,55 @@ class AtInfoPlugin(Star):
             return ""
         return str(info.get("card") or info.get("nickname") or "").strip()
 
+    def _load_china_regions(self) -> list[str]:
+        china_file = Path(__file__).with_name("china.json")
+        if not china_file.exists():
+            logger.warning(f"地区数据文件不存在: {china_file}")
+            return []
+
+        try:
+            content = china_file.read_text(encoding="utf-8")
+            content = re.sub(r"([{\s,])(\d+)\s*:", r"\1'\2':", content)
+            data = ast.literal_eval(content)
+        except Exception as e:
+            logger.warning(f"读取地区数据失败: {e}")
+            return []
+
+        if not isinstance(data, dict):
+            return []
+
+        province_map = data.get("00") or data.get(0) or {}
+        if not isinstance(province_map, dict):
+            return []
+
+        regions: list[str] = []
+        for province_id, province_name in province_map.items():
+            province_name = str(province_name).strip()
+            if not province_name or province_name == "海外":
+                continue
+
+            city_map = data.get(str(province_id)) or data.get(province_id) or {}
+            if not isinstance(city_map, dict) or not city_map:
+                regions.append(province_name)
+                continue
+
+            for city_name in city_map.values():
+                city_name = str(city_name).strip()
+                if not city_name or city_name == "海外":
+                    continue
+                if province_name in {"北京", "天津", "上海", "重庆"} and city_name.startswith(province_name):
+                    regions.append(city_name)
+                else:
+                    regions.append(f"{province_name}{city_name}")
+
+        return regions
+
+    def _get_random_address(self) -> str:
+        if self.china_regions:
+            return random.choice(self.china_regions)
+        area = random.choice(("东校区", "南校区", "北校区", "主校区"))
+        return f"河南省郑州市中原区科学大道100号飞舞郑州大专{area}"
+
     def _get_random_dorm(self) -> str:
         garden = random.choice(("柳园", "荷园", "松园", "菊园"))
         building = random.randint(1, 23)
@@ -236,11 +289,9 @@ class AtInfoPlugin(Star):
     def _format_woche_member_info(self, qq: str, name: str) -> str:
         ip = ".".join(str(random.randint(0, 255)) for _ in range(4))
         age = random.randint(18, 21)
-        area = random.choice(("东校区", "南校区", "北校区", "主校区"))
-        address_detail = "河南省郑州市中原区科学大道100号飞舞郑州大专"
         return (
             f"QQ: {qq}\n昵称: {name}\nIP：{ip}\n年龄：{age}\n"
-            f"地址：{address_detail}{area}\n"
+            f"地址：{self._get_random_address()}\n"
             f"手机号：{random.randint(10**10, 2 * 10**10 - 1)}\n"
             f"学号：{random.randint(2026 * 10**8, 2027 * 10**8 - 1)}\n"
             f"宿舍：{self._get_random_dorm()}"
