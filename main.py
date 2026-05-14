@@ -227,6 +227,12 @@ class AtInfoPlugin(Star):
             return ""
         return str(info.get("card") or info.get("nickname") or "").strip()
 
+    def _get_random_dorm(self) -> str:
+        garden = random.choice(("柳园", "荷园", "松园", "菊园"))
+        building = random.randint(1, 23)
+        room = random.randint(101, 699)
+        return f"{garden}{building}号楼{room}"
+
     def _format_woche_member_info(self, qq: str, name: str) -> str:
         ip = ".".join(str(random.randint(0, 255)) for _ in range(4))
         age = random.randint(18, 21)
@@ -236,7 +242,8 @@ class AtInfoPlugin(Star):
             f"QQ: {qq}\n昵称: {name}\nIP：{ip}\n年龄：{age}\n"
             f"地址：{address_detail}{area}\n"
             f"手机号：{random.randint(10**10, 2 * 10**10 - 1)}\n"
-            f"学号：{random.randint(2026 * 10**8, 2027 * 10**8 - 1)}"
+            f"学号：{random.randint(2026 * 10**8, 2027 * 10**8 - 1)}\n"
+            f"宿舍：{self._get_random_dorm()}"
         )
 
     async def _collect_at_members(self, event: AstrMessageEvent, group_id: str) -> list[tuple[str, str]]:
@@ -306,7 +313,7 @@ class AtInfoPlugin(Star):
         custom_output = self._get_custom_output()
         if custom_output:
             lines.append(custom_output)
-        yield event.plain_result("检测到新人入群，麦基哈正在进行核打击，请稍候...")
+        yield event.plain_result("检测到新人入群，麦基哈正在进行核打击...")
         await asyncio.sleep(10)
         yield event.plain_result("\n".join(lines))
 
