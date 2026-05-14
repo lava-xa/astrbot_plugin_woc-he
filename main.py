@@ -306,6 +306,8 @@ class AtInfoPlugin(Star):
         custom_output = self._get_custom_output()
         if custom_output:
             lines.append(custom_output)
+        yield event.plain_result("检测到新人入群，麦基哈正在进行核打击，请稍候...")
+        await asyncio.sleep(10)
         yield event.plain_result("\n".join(lines))
 
     async def terminate(self):
