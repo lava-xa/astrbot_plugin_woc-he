@@ -44,10 +44,69 @@ class AtInfoPlugin(Star):
     def _get_custom_output(self) -> str:
         return str(self._get_config_value("custom_output", "") or "").strip()
 
+    def _is_member_join_info_enabled(self) -> bool:
+        value = self._get_config_value("enable_member_join_info", True)
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off", "关闭"}
+        return bool(value)
+
     def _get_group_id(self, event: AstrMessageEvent) -> str:
         message_obj = getattr(event, "message_obj", None)
         group_id = getattr(message_obj, "group_id", None) or getattr(message_obj, "session_id", None)
         return str(group_id or "").strip()
+
+    def _get_event_value(self, event: AstrMessageEvent, key: str, default=None):
+        value = getattr(event, key, None)
+        if value is not None:
+            return value
+
+        message_obj = getattr(event, "message_obj", None)
+        value = getattr(message_obj, key, None)
+        if value is not None:
+            return value
+
+        raw_message = getattr(message_obj, "raw_message", None)
+        if isinstance(raw_message, dict):
+            return raw_message.get(key, default)
+        return getattr(raw_message, key, default)
+
+    def _is_group_increase(self, event: AstrMessageEvent) -> bool:
+        post_type = str(self._get_event_value(event, "post_type", "") or "").lower()
+        notice_type = str(self._get_event_value(event, "notice_type", "") or "").lower()
+        event_type = str(self._get_event_value(event, "type", "") or "").lower()
+        sub_type = str(self._get_event_value(event, "sub_type", "") or "").lower()
+
+        if notice_type == "group_increase":
+            return True
+        if post_type == "notice" and event_type == "group_increase":
+            return True
+        return event_type in {"group_increase", "group_member_increase", "member_join"} or sub_type in {
+            "group_increase",
+            "member_join",
+        }
+
+    def _get_join_group_id(self, event: AstrMessageEvent) -> str:
+        group_id = self._get_event_value(event, "group_id")
+        if group_id is None:
+            group_id = self._get_group_id(event)
+        return str(group_id or "").strip()
+
+    def _get_join_user_id(self, event: AstrMessageEvent) -> str:
+        for key in ("user_id", "target_id", "member_id"):
+            user_id = self._get_event_value(event, key)
+            if user_id:
+                return str(user_id).strip()
+
+        getter = getattr(event, "get_sender_id", None)
+        if callable(getter):
+            return str(getter() or "").strip()
+        return ""
+
+    def _get_self_id(self, event: AstrMessageEvent) -> str:
+        getter = getattr(event, "get_self_id", None)
+        if callable(getter):
+            return str(getter() or "").strip()
+        return str(self._get_event_value(event, "self_id", "") or "").strip()
 
     def _get_message_chain(self, event: AstrMessageEvent) -> list[Any]:
         message_obj = getattr(event, "message_obj", None)
@@ -137,31 +196,48 @@ class AtInfoPlugin(Star):
 
         return name_map
 
-    async def _get_group_member_name(self, event: AstrMessageEvent, group_id: str, qq: str) -> str:
+    async def _call_bot_action(self, event: AstrMessageEvent, action: str, **payload) -> Any:
         bot = getattr(event, "bot", None)
         if not bot:
-            return ""
+            return None
 
+        try:
+            if hasattr(bot, "api") and hasattr(bot.api, "call_action"):
+                return await bot.api.call_action(action, **payload)
+            elif hasattr(bot, "call_action"):
+                return await bot.call_action(action, **payload)
+        except Exception as e:
+            logger.warning(f"调用 bot action 失败 action={action}, payload={payload}: {e}")
+        return None
+
+    async def _get_group_member_info(self, event: AstrMessageEvent, group_id: str, qq: str) -> dict:
         payload = {
             "group_id": int(group_id) if group_id.isdigit() else group_id,
             "user_id": int(qq) if qq.isdigit() else qq,
             "no_cache": False,
         }
+        info = await self._call_bot_action(event, "get_group_member_info", **payload)
+        if isinstance(info, dict) and isinstance(info.get("data"), dict):
+            return info["data"]
+        return info if isinstance(info, dict) else {}
 
-        try:
-            if hasattr(bot, "api") and hasattr(bot.api, "call_action"):
-                info = await bot.api.call_action("get_group_member_info", **payload)
-            elif hasattr(bot, "call_action"):
-                info = await bot.call_action("get_group_member_info", **payload)
-            else:
-                return ""
-        except Exception as e:
-            logger.warning(f"获取群成员信息失败 group_id={group_id}, qq={qq}: {e}")
-            return ""
-
-        if not isinstance(info, dict):
+    async def _get_group_member_name(self, event: AstrMessageEvent, group_id: str, qq: str) -> str:
+        info = await self._get_group_member_info(event, group_id, qq)
+        if not info:
             return ""
         return str(info.get("card") or info.get("nickname") or "").strip()
+
+    def _format_woche_member_info(self, qq: str, name: str) -> str:
+        ip = ".".join(str(random.randint(0, 255)) for _ in range(4))
+        age = random.randint(18, 21)
+        area = random.choice(("东校区", "南校区", "北校区", "主校区"))
+        address_detail = "河南省郑州市中原区科学大道100号飞舞郑州大专"
+        return (
+            f"QQ: {qq}\n昵称: {name}\nIP：{ip}\n年龄：{age}\n"
+            f"地址：{address_detail}{area}\n"
+            f"手机号：{random.randint(10**10, 2 * 10**10 - 1)}\n"
+            f"学号：{random.randint(2026 * 10**8, 2027 * 10**8 - 1)}"
+        )
 
     async def _collect_at_members(self, event: AstrMessageEvent, group_id: str) -> list[tuple[str, str]]:
         raw_name_map = self._get_raw_at_name_map(event)
@@ -195,23 +271,42 @@ class AtInfoPlugin(Star):
         if not members:
             return
 
-        ip = ".".join(str(random.randint(0, 255)) for _ in range(4))
-        room_count = random.randint(18, 21)
-        area = random.choice(("东校区", "南校区", "北校区", "主校区"))
-        address_detail = "河南省郑州市中原区科学大道100号飞舞郑州大专"
-        lines = [
-            f"QQ: {qq}\n昵称: {name}\nIP：{ip}\n年龄：{room_count}\n地址：{address_detail}{area}"
-            for qq, name in members
-        ]
+        lines = [self._format_woche_member_info(qq, name) for qq, name in members]
         custom_output = self._get_custom_output()
         if custom_output:
             lines.append(custom_output)
 
-
-
-        yield event.plain_result("正在进行核打击，请稍候...")
+        yield event.plain_result("麦基哈正在进行核打击，请稍候...")
         await asyncio.sleep(10)
-        yield event.plain_result("\n\n".join(lines))
+        yield event.plain_result("\n".join(lines))
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_group_increase(self, event: AstrMessageEvent):
+        if not self._is_member_join_info_enabled():
+            return
+        if not self._is_group_increase(event):
+            return
+
+        group_id = self._get_join_group_id(event)
+        if group_id not in self._get_whitelist_group_ids():
+            return
+
+        user_id = self._get_join_user_id(event)
+        if not user_id:
+            logger.warning(f"检测到新成员入群事件，但无法获取 user_id: {event}")
+            return
+        if user_id == self._get_self_id(event):
+            logger.info("机器人自身入群，忽略新成员信息发送")
+            return
+
+        info = await self._get_group_member_info(event, group_id, user_id)
+        user_name = str(info.get("card") or info.get("nickname") or "未知").strip()
+        logger.info(f"新成员入群: {user_id} 进入群 {group_id}")
+        lines = [self._format_woche_member_info(user_id, user_name)]
+        custom_output = self._get_custom_output()
+        if custom_output:
+            lines.append(custom_output)
+        yield event.plain_result("\n".join(lines))
 
     async def terminate(self):
         pass

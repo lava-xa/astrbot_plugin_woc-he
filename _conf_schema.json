@@ -10,5 +10,11 @@
         "description": "自定义输出内容",
         "hint": "每次输出被 @ 用户信息时，会把这段内容一起发送。留空则不追加。",
         "default": ""
+    },
+    "enable_member_join_info": {
+        "type": "bool",
+        "description": "新成员入群信息通知",
+        "hint": "开启后，当白名单群聊有新成员加入时，会按 /woche 相同格式发送该成员信息。",
+        "default": true
     }
 }
