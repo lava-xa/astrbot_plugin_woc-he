@@ -1,14 +1,14 @@
+import ast
+import asyncio
+import random
+import re
+from pathlib import Path
 from typing import Any
 
-import asyncio
-import ast
-from pathlib import Path
-import re
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 import astrbot.api.message_components as Comp
-import random
 
 
 @register(
@@ -28,22 +28,11 @@ class AtInfoPlugin(Star):
             return self.config.get(key, default)
         return default
 
-    def _normalize_string_list(self, values: object) -> list[str]:
-        if not isinstance(values, (list, tuple, set)):
-            return []
-
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            item = str(value).strip()
-            if not item or item in seen:
-                continue
-            normalized.append(item)
-            seen.add(item)
-        return normalized
-
     def _get_whitelist_group_ids(self) -> set[str]:
-        return set(self._normalize_string_list(self._get_config_value("whitelist_group_ids", [])))
+        values = self._get_config_value("whitelist_group_ids", [])
+        if not isinstance(values, (list, tuple, set)):
+            return set()
+        return {str(value).strip() for value in values if str(value).strip()}
 
     def _get_custom_output(self) -> str:
         return str(self._get_config_value("custom_output", "") or "").strip()
@@ -79,21 +68,17 @@ class AtInfoPlugin(Star):
         notice_type = str(self._get_event_value(event, "notice_type", "") or "").lower()
         event_type = str(self._get_event_value(event, "type", "") or "").lower()
         sub_type = str(self._get_event_value(event, "sub_type", "") or "").lower()
-
-        if notice_type == "group_increase":
-            return True
-        if post_type == "notice" and event_type == "group_increase":
-            return True
-        return event_type in {"group_increase", "group_member_increase", "member_join"} or sub_type in {
+        group_increase_types = {
             "group_increase",
+            "group_member_increase",
             "member_join",
         }
-
-    def _get_join_group_id(self, event: AstrMessageEvent) -> str:
-        group_id = self._get_event_value(event, "group_id")
-        if group_id is None:
-            group_id = self._get_group_id(event)
-        return str(group_id or "").strip()
+        return (
+            notice_type == "group_increase"
+            or post_type == "notice" and event_type == "group_increase"
+            or event_type in group_increase_types
+            or sub_type in group_increase_types
+        )
 
     def _get_join_user_id(self, event: AstrMessageEvent) -> str:
         for key in ("user_id", "target_id", "member_id"):
@@ -105,12 +90,6 @@ class AtInfoPlugin(Star):
         if callable(getter):
             return str(getter() or "").strip()
         return ""
-
-    def _get_self_id(self, event: AstrMessageEvent) -> str:
-        getter = getattr(event, "get_self_id", None)
-        if callable(getter):
-            return str(getter() or "").strip()
-        return str(self._get_event_value(event, "self_id", "") or "").strip()
 
     def _get_message_chain(self, event: AstrMessageEvent) -> list[Any]:
         message_obj = getattr(event, "message_obj", None)
@@ -131,7 +110,7 @@ class AtInfoPlugin(Star):
 
         message_obj = getattr(event, "message_obj", None)
         raw_message = getattr(message_obj, "raw_message", None)
-        for data in self._iter_raw_text_data(raw_message):
+        for data in self._iter_raw_segment_data(raw_message, "text"):
             text = str(data.get("text") or "").strip()
             if text:
                 texts.append(text)
@@ -163,12 +142,6 @@ class AtInfoPlugin(Star):
             ("name", "nickname", "display", "card", "text"),
         )
 
-    def _iter_raw_at_data(self, raw_message: Any) -> list[dict]:
-        return self._iter_raw_segment_data(raw_message, "at")
-
-    def _iter_raw_text_data(self, raw_message: Any) -> list[dict]:
-        return self._iter_raw_segment_data(raw_message, "text")
-
     def _iter_raw_segment_data(self, raw_message: Any, segment_type: str) -> list[dict]:
         if isinstance(raw_message, dict):
             raw_segments = raw_message.get("message", [])
@@ -192,7 +165,7 @@ class AtInfoPlugin(Star):
         raw_message = getattr(message_obj, "raw_message", None)
         name_map: dict[str, str] = {}
 
-        for data in self._iter_raw_at_data(raw_message):
+        for data in self._iter_raw_segment_data(raw_message, "at"):
             qq = str(data.get("qq") or data.get("user_id") or "").strip()
             name = str(data.get("name") or data.get("nickname") or data.get("card") or "").strip()
             if qq and name and qq not in name_map:
@@ -200,36 +173,34 @@ class AtInfoPlugin(Star):
 
         return name_map
 
-    async def _call_bot_action(self, event: AstrMessageEvent, action: str, **payload) -> Any:
+    async def _get_group_member_info(self, event: AstrMessageEvent, group_id: str, qq: str) -> dict:
         bot = getattr(event, "bot", None)
         if not bot:
-            return None
+            return {}
 
-        try:
-            if hasattr(bot, "api") and hasattr(bot.api, "call_action"):
-                return await bot.api.call_action(action, **payload)
-            elif hasattr(bot, "call_action"):
-                return await bot.call_action(action, **payload)
-        except Exception as e:
-            logger.warning(f"调用 bot action 失败 action={action}, payload={payload}: {e}")
-        return None
-
-    async def _get_group_member_info(self, event: AstrMessageEvent, group_id: str, qq: str) -> dict:
         payload = {
             "group_id": int(group_id) if group_id.isdigit() else group_id,
             "user_id": int(qq) if qq.isdigit() else qq,
             "no_cache": False,
         }
-        info = await self._call_bot_action(event, "get_group_member_info", **payload)
+
+        try:
+            if hasattr(bot, "api") and hasattr(bot.api, "call_action"):
+                info = await bot.api.call_action("get_group_member_info", **payload)
+            elif hasattr(bot, "call_action"):
+                info = await bot.call_action("get_group_member_info", **payload)
+            else:
+                return {}
+        except Exception as e:
+            logger.warning(f"获取群成员信息失败 group_id={group_id}, qq={qq}: {e}")
+            return {}
+
         if isinstance(info, dict) and isinstance(info.get("data"), dict):
             return info["data"]
         return info if isinstance(info, dict) else {}
 
-    async def _get_group_member_name(self, event: AstrMessageEvent, group_id: str, qq: str) -> str:
-        info = await self._get_group_member_info(event, group_id, qq)
-        if not info:
-            return ""
-        return str(info.get("card") or info.get("nickname") or "").strip()
+    def _get_member_name_from_info(self, info: dict, default: str = "") -> str:
+        return str(info.get("card") or info.get("nickname") or default).strip()
 
     def _load_china_regions(self) -> list[str]:
         china_file = Path(__file__).with_name("china.json")
@@ -277,8 +248,7 @@ class AtInfoPlugin(Star):
     def _get_random_address(self) -> str:
         if self.china_regions:
             return random.choice(self.china_regions)
-        area = random.choice(("东校区", "南校区", "北校区", "主校区"))
-        return f"河南省郑州市中原区科学大道100号飞舞郑州大专{area}"
+        return "未知地区"
 
     def _get_random_dorm(self) -> str:
         garden = random.choice(("柳园", "荷园", "松园", "菊园"))
@@ -309,7 +279,8 @@ class AtInfoPlugin(Star):
 
             name = self._get_at_name(component) or raw_name_map.get(qq, "")
             if not name:
-                name = await self._get_group_member_name(event, group_id, qq)
+                info = await self._get_group_member_info(event, group_id, qq)
+                name = self._get_member_name_from_info(info)
 
             members.append((qq, name or "未知"))
             seen.add(qq)
@@ -345,7 +316,7 @@ class AtInfoPlugin(Star):
         if not self._is_group_increase(event):
             return
 
-        group_id = self._get_join_group_id(event)
+        group_id = str(self._get_event_value(event, "group_id", "") or self._get_group_id(event)).strip()
         if group_id not in self._get_whitelist_group_ids():
             return
 
@@ -353,12 +324,14 @@ class AtInfoPlugin(Star):
         if not user_id:
             logger.warning(f"检测到新成员入群事件，但无法获取 user_id: {event}")
             return
-        if user_id == self._get_self_id(event):
+        self_id_getter = getattr(event, "get_self_id", None)
+        self_id = str(self_id_getter() if callable(self_id_getter) else self._get_event_value(event, "self_id", "")).strip()
+        if user_id == self_id:
             logger.info("机器人自身入群，忽略新成员信息发送")
             return
 
         info = await self._get_group_member_info(event, group_id, user_id)
-        user_name = str(info.get("card") or info.get("nickname") or "未知").strip()
+        user_name = self._get_member_name_from_info(info, "未知")
         logger.info(f"新成员入群: {user_id} 进入群 {group_id}")
         lines = [self._format_woche_member_info(user_id, user_name)]
         custom_output = self._get_custom_output()
@@ -367,6 +340,3 @@ class AtInfoPlugin(Star):
         yield event.plain_result("检测到新人入群，麦基哈正在进行核打击...")
         await asyncio.sleep(10)
         yield event.plain_result("\n".join(lines))
-
-    async def terminate(self):
-        pass
