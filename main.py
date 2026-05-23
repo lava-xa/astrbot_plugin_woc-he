@@ -117,7 +117,7 @@ class AtInfoPlugin(Star):
         return "".join(texts)
 
     def _is_woche_command(self, event: AstrMessageEvent) -> bool:
-        return self._get_plain_text(event).strip().startswith("/woche")
+        return self._get_plain_text(event).strip().startswith("/盒")
 
     def _get_component_text_value(self, component: Any, keys: tuple[str, ...]) -> str:
         for key in keys:
